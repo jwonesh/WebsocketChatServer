@@ -1,0 +1,24 @@
+{
+  "name": "nw-chat",
+  "version": "1.0.0",
+  "description": "",
+  "main": "angular-seed/app/index.html",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "window": {
+    "toolbar": false,
+    "width": 800,
+    "height": 500
+  },
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.15.2",
+    "express": "^4.14.0",
+    "express-session": "^1.14.1",
+    "mongodb": "^2.2.9",
+    "morgan": "^1.7.0",
+    "session-file-store": "^0.2.1"
+  }
+}
