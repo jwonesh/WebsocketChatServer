@@ -1,0 +1,3 @@
+[submodule "WebsocketChatClient"]
+	path = WebsocketChatClient
+	url = https://github.com/jwonesh/WebsocketChatClient.git
