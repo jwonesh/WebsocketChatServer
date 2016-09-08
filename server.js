@@ -2,8 +2,7 @@ var ws = require("nodejs-websocket");
 var MongoClient = require('mongodb').MongoClient
 var assert = require('assert');
 var app = require('express')();
-var session = require('express-session');
-var FileStore = require('session-file-store')(session);
+//var session = require('express-session');
 var http = require('http');
 var bodyParser = require('body-parser');
 var fs = require('fs');
@@ -12,17 +11,32 @@ var fs = require('fs');
 
 var mongoUrl = 'mongodb://localhost:7999/chatapp';
 
-var insertUsers = function(db, docs, callback) {
+var insertUsers = function(docs, callback, error, db) {
   // Get the documents collection
-  var collection = db.collection('users');
-  // Insert some documents
-  collection.insertMany(docs, function(err, result) {
-    assert.equal(err, null);
-    assert.equal(docs.length, result.result.n);
-    assert.equal(docs.length, result.ops.length);
-    console.log("Inserted " + docs.length + " documents into the collection");
-    callback(result);
-  });
+    var cb = function(_db){
+      var collection = _db.collection('users');
+      // Insert some documents
+      console.log("attempting to insert: " + JSON.stringify(docs));
+      collection.insertMany(docs, function(err, result) {
+            if (err !== null){
+                error(err);
+                console.log("Error inserting: " + JSON.stringify(err));
+            } else{
+                console.log("Inserted.");
+                callback(result);
+            }
+        //assert.equal(err, null);
+        //assert.equal(docs.length, result.result.n);
+        //assert.equal(docs.length, result.ops.length);
+
+      });
+    };
+
+    if (!!db){
+        cb(db);
+    } else{
+        connect(cb);
+    }
 };
 
 var findUsers = function(username, callback, db) {
@@ -63,20 +77,20 @@ var connect = function(cb){
 
 ////////////////////////////////////////////////////
 
-app.use(require('morgan')('dev'));
+//app.use(require('morgan')('dev'));
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 var cookieName = 'chatapp-session';
 
-app.use(session({
-  name: cookieName,
-  secret: 'kmnrkhwe-r9y2134bvbsdflkfsdnzuighasdf6542368123409uhnsafdbjk12',
-  saveUninitialized: true,
-  resave: true,
-  store: new FileStore()
-}));
+//app.use(session({
+//  name: cookieName,
+//  secret: 'kmnrkhwe-r9y2134bvbsdflkfsdnzuighasdf6542368123409uhnsafdbjk12',
+//  saveUninitialized: true,
+//  resave: true,
+//  store: new FileStore()
+//}));
 
 app.post('/login', function (req, res) {
     var user = req.body;
@@ -98,10 +112,21 @@ app.post('/login', function (req, res) {
     findUsers(user.username, callback, null);
 });
 
-app.get('/validateSession', function(req, res){
-    console.log(JSON.stringify(req.headers));
-    console.log(JSON.stringify(req.session));
-    res.send(JSON.stringify({valid: true}))
+app.post('/register', function (req, res) {
+    var user = req.body;
+    var u = {username: user.username, password: user.password, _id: user.username};
+    var callback = function(users){
+        res.status(200);
+        res.send(JSON.stringify({error: 0}));
+    };
+
+    var error = function(err){
+        res.status(401);
+        res.send(JSON.stringify({error: -1}));
+    };
+
+    console.log("u: " + JSON.stringify(u));
+    insertUsers([u], callback, error, null);
 });
 
 var express = app.listen(3000, function () {
@@ -115,6 +140,8 @@ var express = app.listen(3000, function () {
 
 
 var loggedInUsers = [];
+var conversations = {};
+var conversationIndex = 0;
 
 
 
@@ -226,15 +253,22 @@ var server = ws.createServer(function (conn) {
                         console.log("conn = " + connGetter());
                 if (response.error === 0){
                     connGetter().username = event.body.username;
-                    connGetter().loggedIn = true;             
+                    connGetter().loggedIn = true;
+                    var loggedInUserIndex = -1;             
                     for (var i = 0; i < loggedInUsers.length; i++){
                         var c = loggedInUsers[i].conn;
                         if (connGetter().username === loggedInUsers[i].username){
+                            loggedInUserIndex = i;
                             sendMessage(c, JSON.stringify({data: {}, type: "FORCE_LOGOUT"}), {cbid: -2}, {});
                         } else{
                             sendMessage(c, JSON.stringify({data: {username: event.body.username}, type: "USER_LOGGED_IN"}), {cbid: -2}, {});
                         }
                     }
+
+                    if (loggedInUserIndex >= 0){
+                        loggedInUsers.splice(loggedInUserIndex, 1);
+                    }
+
                     sendMessage(conn, "Login OK.", event, headers['set-cookie']);
 
                     loggedInUsers.push({username: event.body.username, conn: connGetter()});
@@ -248,31 +282,40 @@ var server = ws.createServer(function (conn) {
             req.end();
     };
 
-    var testAction = function(conn, event){
-        var post_data = null;
-
-        var options = createRestOptions('localhost', '3000', '/validateSession', 'GET', {
-
-        });
-
-        var req = sendHttpRequest(options, function(data, headers, status){
-            var response = JSON.parse(data);
-
-            if (response.error === 0){
-                sendMessage(conn, "Login OK.", event, headers['set-cookie']);
-            } else{
-                sendError(conn, "Invalid username or password.", event);
+    var registerAction = function(conn, event){
+        var connGetter = function(conn){
+            return function(){
+                return conn;
             }
-        });
+        }(conn);
+        var post_data = JSON.stringify({
+                'username': new String(event.body.username),
+                'password': new String(event.body.password)
+            });
 
-        console.log("writing: " + post_data);
-        req.write(post_data);
-        req.end();
+            var options = createRestOptions('localhost', '3000', '/register', 'POST', {
+                'Content-type': 'application/json',
+                'Content-Length': Buffer.byteLength(post_data)
+            });
+
+            var req = sendHttpRequest(options, function(data, headers, status){
+                var response = JSON.parse(data);
+                        console.log("conn = " + connGetter());
+                if (response.error === 0){
+                    sendMessage(conn, "Register OK.", event, {});
+                } else{
+                    sendError(connGetter(), "Error registering.", event);
+                }
+            });
+
+            console.log("writing: " + post_data);
+            req.write(post_data);
+            req.end();
     };
 
     var getLoggedInUsersAction = function(conn, event){
         if (!conn.loggedIn){
-            return;
+            sendError(conn, "Not logged in.", event);
         }
        
         var users = [];
@@ -286,19 +329,142 @@ var server = ws.createServer(function (conn) {
     };
 
     var sendUserMessage = function(conn, event){
+        if (!conn.loggedIn){
+            sendError(conn, "Not logged in.", event);
+        }
+
+        var conversation = conversations[event.body.cid];
+        if (!conversation){
+            sendError(conn, "Cannot find conversation.", event);
+            return;
+        } else{
+            var userInConvo = true;
+
+            for (var k = 0; k < conversation.participants.length; k++){
+                if (conversation.participants[k] === conn.username){
+                    userInConvo = true;
+                }
+
+            }
+
+            if (!userInConvo){
+                sendError(conn, "Not in conversation.", event);
+                return;
+            }
+        }
+       
         var receiveConn = null;
-        for (var i = 0; i < loggedInUsers.length; i++){
+        for (var i = 0; i < conversation.participants.length; i++){
+            if (conversation.participants[i] !== conn.username){
+                for (var j = 0; j < loggedInUsers.length; j++){
+                    if (loggedInUsers[j].username === conversation.participants[i]){
+                        receiveConn = loggedInUsers[j].conn;
+                        sendMessage(receiveConn, JSON.stringify({data: {message: event.body.message, from: conn.username, cid: event.body.cid, participants: conversation.participants, isGroupChat: conversation.participants.length > 2}, type: "RECEIVE_MESSAGE"}), {cbid: -2}, {});
+                    }
+                }
+            }
+
             if (loggedInUsers[i].username === event.body.username){
                 receiveConn = loggedInUsers[i].conn;
             }
         }
-        sendMessage(receiveConn, JSON.stringify({data: {message: event.body.message, from: conn.username, isGroupChat: false, participants: [{username: conn.username}]}, type: "RECEIVE_MESSAGE"}), {cbid: -2}, {});
+
+        sendMessage(conn, JSON.stringify({}), event, {});
+    };
+
+    var createConversation = function(conn, event){
+        if (!conn.loggedIn){
+            return;
+        }
+        //this could blow up memory
+        var conversation = {};
+        conversation.id = conversationIndex++;
+        conversation.from = conn.username;
+        conversation.participants = event.body.participants;
+        conversations[conversation.id] = conversation;
+
+        sendMessage(conn, JSON.stringify({id: conversation.id}), event, {});
+    };
+
+    var addUserToConversation = function(conn, event){
+        if (!conn.loggedIn){
+            return;
+        }
+
+        //not side-effect free
+        if (!validateConversation(conn, event)){
+            return;
+        }
+
+        var convo = conversations[event.body.cid];
+        var participantList = [];
+        for (var j = 0; j < convo.participants.length; j++){
+            if (convo.participants[j] === event.body.username){
+                sendError(conn, "User aleady in conversation.", event);
+                return;
+            }
+
+            participantList.push(convo.participants[j]);
+        }
+
+        participantList.push(event.body.username);
+        
+        var c = null;
+        var filteredConnections = [];
+        for (var i = 0; i < loggedInUsers.length; i++){
+            if (loggedInUsers[i].username === event.body.username){
+                c = loggedInUsers[i].conn;
+                filteredConnections.push(c);
+            } else if (loggedInUsers[i].username !== conn.username){
+                filteredConnections.push(loggedInUsers[i].conn);
+            }
+        }
+
+        if (c === null){
+            sendError(conn, "User not logged in.", event);
+            return;
+        }
+
+        for (var k = 0; k < filteredConnections.length; k++){
+            sendMessage(filteredConnections[k], JSON.stringify({data: {cid: event.body.cid, participants: participantList, addedBy: event.body.from, addedUser: event.body.username}, type: "ADD_USER_TO_CONVERSATION"}), {cbid: -2}, {});
+        }
+        
+        sendMessage(conn, JSON.stringify({}), event, {});
+
+        convo.participants.push(event.body.username);
+    };
+
+    var validateConversation = function(conn, event){
+        var conversation = conversations[event.body.cid];
+        var filteredUserList = [];
+        if (!conversation){
+            sendError(conn, "Cannot find conversation.", event);
+            return false;
+        } else{
+            var userInConvo = false;
+
+            for (var k = 0; k < conversation.participants.length; k++){
+                if (conversation.participants[k] === conn.username){
+                    userInConvo = true;
+                    break;
+                }
+            }
+
+            if (!userInConvo){
+                sendError(conn, "Not in conversation.", event);
+                return false;
+            }
+        }
+
+        return true;
     };
 
     actions["LOGIN"] = loginAction;
-    actions["TEST"] = testAction;
+    actions["REGISTER"] = registerAction;
     actions["GET_LOGGED_IN_USERS"] = getLoggedInUsersAction;
     actions["SEND_MESSAGE"] = sendUserMessage;
+    actions["CREATE_CONVERSATION"] = createConversation;
+    actions["ADD_USER_TO_CONVERSATION"] = addUserToConversation;
 
 });
 server.listen(8001);
