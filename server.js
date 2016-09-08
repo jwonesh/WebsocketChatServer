@@ -5,16 +5,34 @@ var assert = require('assert');
 var http = require('http');
 
 var fs = require('fs');
+var unirest = require('unirest');
 
 ////////////////////////////////////////////////////////////////////////
 
 var loggedInUsers = [];
 var conversations = {};
 var conversationIndex = 0;
+var voiceChatRooms = null;
 
+unirest.get('http://localhost:3000/voice/room/all')
+  .end(function(res) {
+    if (res.error) {
+      console.log('GET error', res.error)
+    } else {
+      console.log('GET response', res.body)
+      voiceChatRooms = {};
+
+      voiceChatRooms["lobby"] = {name: "Lobby", owner: "Server", created_by: "Server"};
+      for (var i = 0; i < res.body.length; i++){
+        voiceChatRooms[res.body[i].name.toLowerCase()] = res.body[i];
+      }      
+    }
+});
 
 
 var server = ws.createServer(function (conn) {
+    //populate voice chat rooms
+
 
    
     conn.on("text", function (str) {
@@ -44,7 +62,7 @@ var server = ws.createServer(function (conn) {
                 console.log("sending forced logout call to: " + c.username);
                 sendMessage(c, JSON.stringify({data: {username: conn.username}, type: "USER_LOGGED_OUT"}), {cbid: -2}, {});
             }
-            }
+        }
         console.log("Connection closed");
     });
 
@@ -138,7 +156,7 @@ var server = ws.createServer(function (conn) {
                         loggedInUsers.splice(loggedInUserIndex, 1);
                     }
 
-                    sendMessage(conn, "Login OK.", event, headers['set-cookie']);
+                    sendMessage(connGetter(), "Login OK.", event, {});
 
                     loggedInUsers.push({username: event.body.username, conn: connGetter()});
                 } else{
@@ -185,6 +203,7 @@ var server = ws.createServer(function (conn) {
     var getLoggedInUsersAction = function(conn, event){
         if (!conn.loggedIn){
             sendError(conn, "Not logged in.", event);
+            return;
         }
        
         var users = [];
@@ -200,6 +219,7 @@ var server = ws.createServer(function (conn) {
     var sendUserMessage = function(conn, event){
         if (!conn.loggedIn){
             sendError(conn, "Not logged in.", event);
+            return;
         }
 
         var conversation = conversations[event.body.cid];
@@ -243,6 +263,7 @@ var server = ws.createServer(function (conn) {
 
     var createConversation = function(conn, event){
         if (!conn.loggedIn){
+            sendError(conn, "Not logged in.", event);
             return;
         }
         //this could blow up memory
@@ -257,6 +278,7 @@ var server = ws.createServer(function (conn) {
 
     var addUserToConversation = function(conn, event){
         if (!conn.loggedIn){
+            sendError(conn, "Not logged in.", event);
             return;
         }
 
@@ -328,12 +350,94 @@ var server = ws.createServer(function (conn) {
         return true;
     };
 
+    var createVoiceChatRoom = function(conn, event){
+        if (!conn.loggedIn){
+            sendError(conn, "Not logged in.", event);
+            return;
+        }
+
+        if (!!event.body.name && event.body.name.toLowerCase() === 'lobby'){
+            sendError(conn, "Invalid request.", event);
+            return;      
+        }
+
+        var connGetter = function(conn){
+            return function(){
+                return conn;
+            }
+        }(conn);
+
+        //TODO: Validation of whether or not user can create chat room
+
+        var post_data = JSON.stringify({
+            'name': new String(event.body.name),
+            'owner': new String(event.body.owner),
+            'created_by': new String(conn.username)
+        });
+
+        var options = createRestOptions('localhost', '3000', '/voice/room', 'POST', {
+            'Content-type': 'application/json',
+            'Content-Length': Buffer.byteLength(post_data)
+        });
+
+        var req = sendHttpRequest(options, function(data, headers, status){
+            var response = JSON.parse(data);
+                    console.log("conn = " + connGetter());
+            if (response.error === 0){
+                voiceChatRooms[event.body.name.toLowerCase()] = {name: event.body.name, participants: []};
+                var loggedInUserIndex = -1;             
+                for (var i = 0; i < loggedInUsers.length; i++){
+                    var c = loggedInUsers[i].conn;
+                    //if (connGetter().username !== loggedInUsers[i].username){
+                        //room names are implicitly unique
+                        sendMessage(c, JSON.stringify({data: JSON.parse(post_data), type: "VOICE_CHAT_ROOM_CREATED"}), {cbid: -2}, {});
+                    //}
+                }
+
+                sendMessage(connGetter(), "Chat room created", event, {});
+
+                loggedInUsers.push({username: event.body.username, conn: connGetter()});
+            } else{
+                sendError(connGetter(), "Cannot create chat room.", event);
+            }
+        });
+
+        console.log("writing: " + post_data);
+        req.write(post_data);
+        req.end();
+
+
+    };
+
+    var getVoiceChatRooms = function(conn, event){
+        if (!conn.loggedIn){
+            sendError(conn, "Not logged in.", event);
+            return;
+        }
+
+        sendMessage(conn, JSON.stringify(voiceChatRooms), event, {});
+    };
+
+    var connectToVoiceChatRoom = function(conn, event){
+        if (!conn.loggedIn){
+            sendError(conn, "Not logged in.", event);
+            return;
+        }
+
+        var roomName = event.body.name;
+
+
+    };
+
     actions["LOGIN"] = loginAction;
     actions["REGISTER"] = registerAction;
     actions["GET_LOGGED_IN_USERS"] = getLoggedInUsersAction;
     actions["SEND_MESSAGE"] = sendUserMessage;
     actions["CREATE_CONVERSATION"] = createConversation;
     actions["ADD_USER_TO_CONVERSATION"] = addUserToConversation;
+    actions["CREATE_VOICE_CHAT_ROOM"] = createVoiceChatRoom;
+    actions["GET_VOICE_CHAT_ROOMS"] = getVoiceChatRooms;
+    actions["CONNECT_TO_VOICE_CHAT_ROOM"] = connectToVoiceChatRoom;
 
 });
 server.listen(8001);

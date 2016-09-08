@@ -5,10 +5,10 @@ var assert = require('assert');
 
 var mongoUrl = 'mongodb://localhost:7999/chatapp';
 
-var insertUsers = function(docs, callback, error, db) {
+var insertDocuments = function(docs, callback, error, db, collectionName) {
   // Get the documents collection
     var cb = function(_db){
-      var collection = _db.collection('users');
+      var collection = _db.collection(collectionName);
       // Insert some documents
       console.log("attempting to insert: " + JSON.stringify(docs));
       collection.insertMany(docs, function(err, result) {
@@ -33,17 +33,12 @@ var insertUsers = function(docs, callback, error, db) {
     }
 };
 
-var findUsers = function(username, callback, db) {
+var findDocuments = function(argObj, callback, db, collectionName) {
   // Get the documents collection
   
   // Find some documents
-  var argObj = {};
-  if (!!username){
-    argObj.username = username;
-  }
-
   var cb = function(_db){
-    var collection = _db.collection('users');
+    var collection = _db.collection(collectionName);
     collection.find(argObj).toArray(function(err, docs) {
         assert.equal(err, null);
         console.log("Found the following records");
@@ -103,7 +98,7 @@ app.post('/login', function (req, res) {
         }
     };
 
-    findUsers(user.username, callback, null);
+    findDocuments(user, callback, null, 'users');
 });
 
 app.post('/register', function (req, res) {
@@ -120,7 +115,33 @@ app.post('/register', function (req, res) {
     };
 
     console.log("u: " + JSON.stringify(u));
-    insertUsers([u], callback, error, null);
+    insertDocuments([u], callback, error, null, 'users');
+});
+
+app.post('/voice/room', function (req, res) {
+    var room = req.body;
+    var r = {name: room.name, owner: room.owner, created_by: room.created_by, _id: room.name};
+    var callback = function(users){
+        res.status(200);
+        res.send(JSON.stringify({error: 0}));
+    };
+
+    var error = function(err){
+        res.status(401);
+        res.send(JSON.stringify({error: -1}));
+    };
+
+    console.log("r: " + JSON.stringify(r));
+    insertDocuments([r], callback, error, null, 'voicerooms');
+});
+
+app.get('/voice/room/all', function (req, res) {
+  var callback = function(rooms){
+        res.status(200);
+        res.send(rooms);
+    };
+
+  findDocuments({}, callback, null, 'voicerooms');
 });
 
 var express = app.listen(3000, function () {
