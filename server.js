@@ -22,9 +22,10 @@ unirest.get('http://localhost:3000/voice/room/all')
       console.log('GET response', res.body)
       voiceChatRooms = {};
 
-      voiceChatRooms["lobby"] = {name: "Lobby", owner: "Server", created_by: "Server"};
+      voiceChatRooms["lobby"] = {name: "Lobby", owner: "Server", created_by: "Server", participants: []};
       for (var i = 0; i < res.body.length; i++){
         voiceChatRooms[res.body[i].name.toLowerCase()] = res.body[i];
+        voiceChatRooms[res.body[i].name.toLowerCase()].participants = [];
       }      
     }
 });
@@ -49,18 +50,32 @@ var server = ws.createServer(function (conn) {
     });
 
     conn.on("close", function (code, reason) {
-        var index = -1;
-        for (var j = 0; j < loggedInUsers.length; j++){
-            if (loggedInUsers[j].username === conn.username){
-                index = j;
-            }
-        }
         if (!!conn.loggedIn){
-            loggedInUsers.splice(index, 1);
-            for (var i = 0; i < loggedInUsers.length; i++){
-                var c = loggedInUsers[i].conn;
-                console.log("sending forced logout call to: " + c.username);
-                sendMessage(c, JSON.stringify({data: {username: conn.username}, type: "USER_LOGGED_OUT"}), {cbid: -2}, {});
+            var index = -1;
+            for (var j = 0; j < loggedInUsers.length; j++){
+                if (loggedInUsers[j].username === conn.username){
+                    index = j;
+                    break;
+                }
+            }
+
+            for (var k in voiceChatRooms){
+                var participants = voiceChatRooms[k].participants;
+                for (var l = 0; l < participants.length; l++){
+                    if (participants[l] === conn.username){
+                        participants.splice(l, 1);
+                        break;
+                    }
+                }
+            }
+
+            if (!!conn.loggedIn){
+                loggedInUsers.splice(index, 1);
+                for (var i = 0; i < loggedInUsers.length; i++){
+                    var c = loggedInUsers[i].conn;
+                    console.log("sending forced logout call to: " + c.username);
+                    sendMessage(c, JSON.stringify({data: {username: conn.username}, type: "USER_LOGGED_OUT"}), {cbid: -2}, {});
+                }
             }
         }
         console.log("Connection closed");
@@ -141,11 +156,27 @@ var server = ws.createServer(function (conn) {
                 if (response.error === 0){
                     connGetter().username = event.body.username;
                     connGetter().loggedIn = true;
+
+                    var room = null;
+                    for (var k in voiceChatRooms){
+                        room = voiceChatRooms[k];
+
+                        for (var l = 0; l < room.participants.length; l++){
+                            if (room.participants[l] === event.body.username){
+                                room.participants.splice(l, 1);
+                                break;
+                            }
+                        }
+                    }
+
+                    voiceChatRooms["lobby"].participants.push(event.body.username);
+                    connGetter().currVoiceChatRoom = "lobby";
                     var loggedInUserIndex = -1;             
                     for (var i = 0; i < loggedInUsers.length; i++){
                         var c = loggedInUsers[i].conn;
                         if (connGetter().username === loggedInUsers[i].username){
                             loggedInUserIndex = i;
+                            c.loggedIn = false;
                             sendMessage(c, JSON.stringify({data: {}, type: "FORCE_LOGOUT"}), {cbid: -2}, {});
                         } else{
                             sendMessage(c, JSON.stringify({data: {username: event.body.username}, type: "USER_LOGGED_IN"}), {cbid: -2}, {});
@@ -384,13 +415,16 @@ var server = ws.createServer(function (conn) {
             var response = JSON.parse(data);
                     console.log("conn = " + connGetter());
             if (response.error === 0){
-                voiceChatRooms[event.body.name.toLowerCase()] = {name: event.body.name, participants: []};
+                voiceChatRooms[event.body.name.toLowerCase()] = event.body;
+                voiceChatRooms[event.body.name.toLowerCase()].participants = [];
                 var loggedInUserIndex = -1;             
                 for (var i = 0; i < loggedInUsers.length; i++){
                     var c = loggedInUsers[i].conn;
                     //if (connGetter().username !== loggedInUsers[i].username){
                         //room names are implicitly unique
-                        sendMessage(c, JSON.stringify({data: JSON.parse(post_data), type: "VOICE_CHAT_ROOM_CREATED"}), {cbid: -2}, {});
+                        var to_send = JSON.parse(post_data);
+                        to_send.participants = [];
+                        sendMessage(c, JSON.stringify({data: to_send, type: "VOICE_CHAT_ROOM_CREATED"}), {cbid: -2}, {});
                     //}
                 }
 
@@ -425,6 +459,53 @@ var server = ws.createServer(function (conn) {
         }
 
         var roomName = event.body.name;
+
+        if (roomName === undefined || roomName === null){
+            sendError(conn, "Room not specified", event);
+            return;
+        }
+
+        roomName = roomName.toLowerCase();
+
+        //TODO: Check if user can access room
+        //TODO: add separate admin method for moving user; this method assumes user initiated move and pulls username from connection
+
+        if (!voiceChatRooms[roomName]){
+            sendError(conn, "Room does not exist.", event);
+            return;
+        }
+
+        var participants = voiceChatRooms[roomName].participants;
+        for (var i = 0; i < participants.length; i++){
+            if (participants[i] === conn.username){
+                sendError(conn, "Already in room.", event);                
+                return;
+            }
+        }
+
+        //remove from old conversations
+        for (var k in voiceChatRooms){
+            participants = voiceChatRooms[k].participants;
+            for (var l = 0; l < participants.length; l++){
+                if (participants[l] === conn.username){
+                    participants.splice(l, 1);
+                    break;
+                }
+            }
+        }
+
+        participants = voiceChatRooms[roomName].participants;
+
+        participants.push(conn.username);
+        for (var j = 0; j < loggedInUsers.length; j++){
+            var c = loggedInUsers[j].conn;
+            if (conn.username !== loggedInUsers[j].username){
+                //room names are implicitly unique
+                sendMessage(c, JSON.stringify({data: {username: conn.username, name: roomName}, type: "CONNECT_TO_VOICE_CHAT_ROOM"}), {cbid: -2}, {});
+            }
+        }
+
+        sendMessage(conn, "Connected to chat room.", event, {});
 
 
     };
