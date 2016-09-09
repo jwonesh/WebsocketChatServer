@@ -81,6 +81,47 @@ var server = ws.createServer(function (conn) {
         console.log("Connection closed");
     });
 
+    conn.on("binary", function (inStream) {
+        var connGetter = function(conn){
+            return function(){
+                return conn;
+            }
+        }(conn);
+        // Empty buffer for collecting binary data 
+        var data = new Buffer(0);
+        // Read chunks of binary data and add to the buffer 
+        inStream.on("readable", function () {
+            var newData = inStream.read();
+            if (newData)
+                data = Buffer.concat([data, newData], data.length+newData.length);
+        })
+        inStream.on("end", function () {
+            console.log("Received " + data.length + " bytes of binary data");
+            process_my_data(connGetter(), data);
+        })
+    });
+
+    function process_my_data(conn, data){
+        //broadcast to channel
+        var chatRoom = voiceChatRooms[conn.currVoiceChatRoom];
+        if (!conn.loggedIn){
+            //sendError(conn, JSON.stringify({data: {username: conn.username}, type: "VOICE_CHAT_NOT_LOGGED_IN"}), {cbid: -2}, {});
+            console.log("not lgoged in?");
+            return;
+        }
+
+        //TODO: optimize this loop
+        if (chatRoom !== undefined && chatRoom !== null){
+            for (var i = 0; i < chatRoom.participants.length; i++){
+                for (var j = 0; j < loggedInUsers.length; j++){
+                    if (loggedInUsers[j].username === chatRoom.participants[i] && loggedInUsers[j].username !== conn.username){
+                        conn.sendBinary(data, function(){});
+                    }
+                }
+            }
+        }
+    };
+
     conn.on("error", function(errorObj){
     	console.log("Error!");
     });
