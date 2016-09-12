@@ -115,7 +115,7 @@ var server = ws.createServer(function (conn) {
             for (var i = 0; i < chatRoom.participants.length; i++){
                 for (var j = 0; j < loggedInUsers.length; j++){
                     if (loggedInUsers[j].username === chatRoom.participants[i] && loggedInUsers[j].username !== conn.username){
-                        conn.sendBinary(data, function(){});
+                        loggedInUsers[j].conn.sendBinary(data, function(){});
                     }
                 }
             }
