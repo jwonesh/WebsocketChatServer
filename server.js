@@ -7,12 +7,18 @@ var http = require('http');
 var fs = require('fs');
 var unirest = require('unirest');
 
+//peer server running in same scope so we can communicate data
+var PeerServer = require('peer').PeerServer;
+var peer = PeerServer({port: 9000, path: '/chat'});
+
 ////////////////////////////////////////////////////////////////////////
 
 var loggedInUsers = [];
 var conversations = {};
 var conversationIndex = 0;
 var voiceChatRooms = null;
+var peerIdToUsernameMap = {};
+var usernameToPeerIdMap = {};
 
 unirest.get('http://localhost:3000/voice/room/all')
   .end(function(res) {
@@ -29,6 +35,16 @@ unirest.get('http://localhost:3000/voice/room/all')
       }      
     }
 });
+
+
+/////////////////////////////
+//configure peer server
+peer.on('connection', function(id) {
+    console.log("PEER CONNECTED: " + id);
+});
+
+
+/////////////////////////////
 
 
 var server = ws.createServer(function (conn) {
@@ -62,7 +78,7 @@ var server = ws.createServer(function (conn) {
             for (var k in voiceChatRooms){
                 var participants = voiceChatRooms[k].participants;
                 for (var l = 0; l < participants.length; l++){
-                    if (participants[l] === conn.username){
+                    if (participants[l].username === conn.username){
                         participants.splice(l, 1);
                         break;
                     }
@@ -114,13 +130,17 @@ var server = ws.createServer(function (conn) {
         if (chatRoom !== undefined && chatRoom !== null){
             for (var i = 0; i < chatRoom.participants.length; i++){
                 for (var j = 0; j < loggedInUsers.length; j++){
-                    if (loggedInUsers[j].username === chatRoom.participants[i] && loggedInUsers[j].username !== conn.username){
+                    if (loggedInUsers[j].username === chatRoom.participants[i].username && loggedInUsers[j].username !== conn.username){
                         loggedInUsers[j].conn.sendBinary(data, function(){});
                     }
                 }
             }
         }
     };
+
+    function getPeerId(username){
+        return username;
+    }
 
     conn.on("error", function(errorObj){
     	console.log("Error!");
@@ -203,15 +223,20 @@ var server = ws.createServer(function (conn) {
                         room = voiceChatRooms[k];
 
                         for (var l = 0; l < room.participants.length; l++){
-                            if (room.participants[l] === event.body.username){
+                            if (room.participants[l].username === event.body.username){
                                 room.participants.splice(l, 1);
                                 break;
                             }
                         }
                     }
 
-                    voiceChatRooms["lobby"].participants.push(event.body.username);
+                    //TODO: actually make this a random id (i.e., implement this function)
+                    var peerId = event.body.peerId;
+                    conn.peerId = peerId;
+                    voiceChatRooms["lobby"].participants.push({username: event.body.username, peerId: peerId});
                     connGetter().currVoiceChatRoom = "lobby";
+                    peerIdToUsernameMap[peerId] = connGetter().username;
+                    usernameToPeerIdMap[connGetter().username] = peerId;
                     var loggedInUserIndex = -1;             
                     for (var i = 0; i < loggedInUsers.length; i++){
                         var c = loggedInUsers[i].conn;
@@ -220,7 +245,7 @@ var server = ws.createServer(function (conn) {
                             c.loggedIn = false;
                             sendMessage(c, JSON.stringify({data: {}, type: "FORCE_LOGOUT"}), {cbid: -2}, {});
                         } else{
-                            sendMessage(c, JSON.stringify({data: {username: event.body.username}, type: "USER_LOGGED_IN"}), {cbid: -2}, {});
+                            sendMessage(c, JSON.stringify({data: {username: event.body.username, peerId: peerId}, type: "USER_LOGGED_IN"}), {cbid: -2}, {});
                         }
                     }
 
@@ -518,7 +543,7 @@ var server = ws.createServer(function (conn) {
 
         var participants = voiceChatRooms[roomName].participants;
         for (var i = 0; i < participants.length; i++){
-            if (participants[i] === conn.username){
+            if (participants[i].username === conn.username){
                 sendError(conn, "Already in room.", event);                
                 return;
             }
@@ -528,7 +553,7 @@ var server = ws.createServer(function (conn) {
         for (var k in voiceChatRooms){
             participants = voiceChatRooms[k].participants;
             for (var l = 0; l < participants.length; l++){
-                if (participants[l] === conn.username){
+                if (participants[l].username === conn.username){
                     participants.splice(l, 1);
                     break;
                 }
@@ -537,7 +562,7 @@ var server = ws.createServer(function (conn) {
 
         participants = voiceChatRooms[roomName].participants;
 
-        participants.push(conn.username);
+        participants.push({username: conn.username, peerId: conn.peerId});
         for (var j = 0; j < loggedInUsers.length; j++){
             var c = loggedInUsers[j].conn;
             if (conn.username !== loggedInUsers[j].username){
