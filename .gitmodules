@@ -1,3 +1,6 @@
 [submodule "WebsocketChatClient"]
 	path = WebsocketChatClient
 	url = https://github.com/jwonesh/WebsocketChatClient.git
+[submodule "peerjs-server"]
+	path = peerjs-server
+	url = https://github.com/jwonesh/peerjs-server.git

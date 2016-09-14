@@ -7,9 +7,7 @@ var http = require('http');
 var fs = require('fs');
 var unirest = require('unirest');
 
-//peer server running in same scope so we can communicate data
-var PeerServer = require('peer').PeerServer;
-var peer = PeerServer({port: 9000, path: '/chat'});
+
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -36,7 +34,19 @@ unirest.get('http://localhost:3000/voice/room/all')
     }
 });
 
+/////////////////////////////
+//Extend peer server functionality to validate requets
+var validateIdLoggedIn = function(map){
+    return function(id){
+        var loggedIn = !!peerIdToUsernameMap[id];
+        console.log("User " + id + " is " + (!loggedIn ? "not " : "") + "logged in.");
+        return loggedIn;
+    };
+}(peerIdToUsernameMap);
 
+//peer server running in same scope so we can communicate data
+var PeerServer = require('./peerjs-server/lib/index').PeerServer;
+var peer = PeerServer({port: 9000, path: '/chat'}, null, validateIdLoggedIn);
 /////////////////////////////
 //configure peer server
 peer.on('connection', function(id) {
